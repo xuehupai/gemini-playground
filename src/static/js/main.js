@@ -82,18 +82,7 @@ applyConfigButton.addEventListener('click', () => {
 // Fetch models and populate the dropdown
 async function fetchModels() {
     try {
-        const apiKey = apiKeyInput.value;
-        if (!apiKey) {
-            logMessage('请先输入API Key以加载模型列表', 'system');
-            modelSelect.innerHTML = '<option value="">请输入API Key</option>';
-            return;
-        }
-
-        const response = await fetch('/models', {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`
-            }
-        });
+        const response = await fetch('/models');
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
