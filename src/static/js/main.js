@@ -33,9 +33,9 @@ const fpsInput = document.getElementById('fps-input');
 const configToggle = document.getElementById('config-toggle');
 const configContainer = document.getElementById('config-container');
 const systemInstructionInput = document.getElementById('system-instruction');
+systemInstructionInput.value = CONFIG.SYSTEM_INSTRUCTION.TEXT;
 const applyConfigButton = document.getElementById('apply-config');
 const responseTypeSelect = document.getElementById('response-type-select');
-const modelSelect = document.getElementById('model-select');
 
 // Load saved values from localStorage
 const savedApiKey = localStorage.getItem('gemini_api_key');
@@ -238,99 +238,45 @@ async function resumeAudioContext() {
     }
 }
 
-// 添加获取模型列表的函数
-async function fetchModels() {
-    try {
-        const apiKey = apiKeyInput.value;
-        if (!apiKey) {
-            logMessage('请先输入 API Key 以加载模型列表', 'system');
-            modelSelect.innerHTML = '<option value="">请先输入 API Key</option>';
-            return;
-        }
-
-        const response = await fetch('/models', {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        // 清空现有选项
-        modelSelect.innerHTML = '<option value="">请选择模型</option>';
-
-        // 添加获取到的模型列表
-        data.data.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = model.id;
-            modelSelect.appendChild(option);
-        });
-
-        logMessage('模型列表加载成功', 'system');
-    } catch (error) {
-        console.error('获取模型列表失败:', error);
-        logMessage('获取模型列表失败: ' + error.message, 'system');
-        modelSelect.innerHTML = '<option value="">加载模型失败</option>';
-    }
-}
-
-// 当 API Key 输入框值改变时，重新获取模型列表
-apiKeyInput.addEventListener('change', fetchModels);
-apiKeyInput.addEventListener('input', debounce(fetchModels, 500));
-
-// 防抖函数
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
-
-// 修改连接函数，使用选中的模型
+/**
+ * Connects to the WebSocket server.
+ * @returns {Promise<void>}
+ */
 async function connectToWebsocket() {
     if (!apiKeyInput.value) {
-        logMessage('请输入 API Key', 'system');
+        logMessage('Please input API Key', 'system');
         return;
     }
 
-    const selectedModel = modelSelect.value;
-    if (!selectedModel) {
-        logMessage('请选择一个模型', 'system');
-        return;
-    }
+    // Save values to localStorage
+    localStorage.setItem('gemini_api_key', apiKeyInput.value);
+    localStorage.setItem('gemini_voice', voiceSelect.value);
+    localStorage.setItem('system_instruction', systemInstructionInput.value);
+
+    const config = {
+        model: CONFIG.API.MODEL_NAME,
+        generationConfig: {
+            responseModalities: responseTypeSelect.value,
+            speechConfig: {
+                voiceConfig: { 
+                    prebuiltVoiceConfig: { 
+                        voiceName: voiceSelect.value    // You can change voice in the config.js file
+                    }
+                }
+            },
+
+        },
+        systemInstruction: {
+            parts: [{
+                text: systemInstructionInput.value     // You can change system instruction in the config.js file
+            }],
+        }
+    };  
 
     try {
-        // 使用选中的模型进行连接
-        await client.connect({
-            model: selectedModel,
-            generationConfig: {
-                responseModalities: responseTypeSelect.value,
-                speechConfig: {
-                    voiceConfig: { 
-                        prebuiltVoiceConfig: { 
-                            voiceName: voiceSelect.value    // You can change voice in the config.js file
-                        }
-                    }
-                },
-            },
-            systemInstruction: {
-                parts: [{
-                    text: systemInstructionInput.value     // You can change system instruction in the config.js file
-                }],
-            }
-        }, apiKeyInput.value);
-
+        await client.connect(config,apiKeyInput.value);
         isConnected = true;
+        await resumeAudioContext();
         connectButton.textContent = 'Disconnect';
         connectButton.classList.add('connected');
         messageInput.disabled = false;
@@ -338,11 +284,11 @@ async function connectToWebsocket() {
         micButton.disabled = false;
         cameraButton.disabled = false;
         screenButton.disabled = false;
-        logMessage('已连接到 Gemini API', 'system');
+        logMessage('Connected to Gemini 2.0 Flash Multimodal Live API', 'system');
     } catch (error) {
-        const errorMessage = error.message || '未知错误';
-        console.error('连接错误:', error);
-        logMessage(`连接错误: ${errorMessage}`, 'system');
+        const errorMessage = error.message || 'Unknown error';
+        Logger.error('Connection error:', error);
+        logMessage(`Connection error: ${errorMessage}`, 'system');
         isConnected = false;
         connectButton.textContent = 'Connect';
         connectButton.classList.remove('connected');
@@ -609,7 +555,4 @@ function stopScreenSharing() {
 
 screenButton.addEventListener('click', handleScreenShare);
 screenButton.disabled = true;
-
-// 页面加载时获取模型列表
-document.addEventListener('DOMContentLoaded', fetchModels);
   

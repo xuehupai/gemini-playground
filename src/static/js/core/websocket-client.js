@@ -20,10 +20,10 @@ export class MultimodalLiveClient extends EventEmitter {
      */
     constructor() {
         super();
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        this.baseUrl  = `${wsProtocol}//${window.location.host}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
         this.ws = null;
-        this.isConnected = false;
-        this.messageQueue = [];
-        this.currentModel = null;
+        this.config = null;
         this.send = this.send.bind(this);
         this.toolManager = new ToolManager();
     }
@@ -56,50 +56,67 @@ export class MultimodalLiveClient extends EventEmitter {
      * @returns {Promise<boolean>} - Resolves with true when the connection is established.
      * @throws {ApplicationError} - Throws an error if the connection fails.
      */
-    async connect(config, apiKey) {
-        if (this.isConnected) {
-            throw new Error('已经连接到服务器');
-        }
+    connect(config,apiKey) {
+        this.config = {
+            ...config,
+            tools: [
+                ...this.toolManager.getToolDeclarations(),
+                ...(config.tools || [])
+            ]
+        };
+        const ws = new WebSocket(`${this.baseUrl}?key=${apiKey}`);
 
-        this.currentModel = config.model;
-        const wsUrl = new URL('/v1/models/' + this.currentModel + ':streamGenerateContent', window.location.origin);
-        wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-        
-        // 添加 API Key 到 URL
-        wsUrl.searchParams.append('key', apiKey);
+        ws.addEventListener('message', async (evt) => {
+            if (evt.data instanceof Blob) {
+                this.receive(evt.data);
+            } else {
+                console.log('Non-blob message', evt);
+            }
+        });
 
         return new Promise((resolve, reject) => {
-            try {
-                this.ws = new WebSocket(wsUrl.toString());
+            const onError = (ev) => {
+                this.disconnect(ws);
+                const message = `Could not connect to "${this.url}"`;
+                this.log(`server.${ev.type}`, message);
+                throw new ApplicationError(
+                    message,
+                    ErrorCodes.WEBSOCKET_CONNECTION_FAILED,
+                    { originalError: ev }
+                );
+            };
 
-                this.ws.onopen = () => {
-                    this.isConnected = true;
-                    this.processMessageQueue();
-                    resolve();
-                };
+            ws.addEventListener('error', onError);
+            ws.addEventListener('open', (ev) => {
+                if (!this.config) {
+                    reject('Invalid config sent to `connect(config)`');
+                    return;
+                }
+                this.log(`client.${ev.type}`, 'Connected to socket');
+                this.emit('open');
 
-                this.ws.onclose = () => {
-                    this.isConnected = false;
-                    this.currentModel = null;
-                    if (this.onClose) {
-                        this.onClose();
+                this.ws = ws;
+
+                const setupMessage = { setup: this.config };
+                this._sendDirect(setupMessage);
+                this.log('client.send', 'setup');
+
+                ws.removeEventListener('error', onError);
+                ws.addEventListener('close', (ev) => {
+                    this.disconnect(ws);
+                    let reason = ev.reason || '';
+                    if (reason.toLowerCase().includes('error')) {
+                        const prelude = 'ERROR]';
+                        const preludeIndex = reason.indexOf(prelude);
+                        if (preludeIndex > 0) {
+                            reason = reason.slice(preludeIndex + prelude.length + 1);
+                        }
                     }
-                };
-
-                this.ws.onerror = (error) => {
-                    this.isConnected = false;
-                    this.currentModel = null;
-                    reject(error);
-                };
-
-                this.ws.onmessage = (event) => {
-                    if (this.onMessage) {
-                        this.onMessage(event.data);
-                    }
-                };
-            } catch (error) {
-                reject(error);
-            }
+                    this.log(`server.${ev.type}`, `Disconnected ${reason ? `with reason: ${reason}` : ''}`);
+                    this.emit('close', { code: ev.code, reason });
+                });
+                resolve(true);
+            });
         });
     }
 
