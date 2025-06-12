@@ -325,12 +325,17 @@ async function connectToWebsocket() {
     try {
         // 如果已经连接，先断开
         if (client.isConnected) {
+            logMessage('正在断开现有连接...', 'info');
             client.disconnect();
             await new Promise(resolve => setTimeout(resolve, 1000)); // 等待断开连接完成
         }
 
+        // 禁用连接按钮，防止重复点击
+        connectButton.disabled = true;
+        connectButton.textContent = '连接中...';
+
         // 使用选中的模型进行连接
-        await client.connect({
+        const config = {
             model: selectedModel,
             generationConfig: {
                 responseModalities: responseTypeSelect.value,
@@ -347,7 +352,10 @@ async function connectToWebsocket() {
                     text: systemInstructionInput.value     // You can change system instruction in the config.js file
                 }],
             }
-        }, apiKeyInput.value);
+        };
+
+        logMessage(`正在连接到模型: ${selectedModel}`, 'info');
+        await client.connect(config, apiKeyInput.value);
 
         isConnected = true;
         connectButton.textContent = 'Disconnect';
@@ -357,10 +365,19 @@ async function connectToWebsocket() {
         micButton.disabled = false;
         cameraButton.disabled = false;
         screenButton.disabled = false;
-        logMessage('已连接到 Gemini API', 'system');
+        logMessage('连接成功', 'success');
     } catch (error) {
         console.error('连接错误:', error);
         logMessage(`连接错误: ${error.message}`, 'error');
+        
+        // 如果是 1006 错误，可能是服务器问题，给出更详细的提示
+        if (error.message.includes('1006')) {
+            logMessage('服务器可能拒绝了连接，请检查：', 'error');
+            logMessage('1. API Key 是否正确', 'error');
+            logMessage('2. 选择的模型是否可用', 'error');
+            logMessage('3. 服务器是否在线', 'error');
+        }
+        
         isConnected = false;
         connectButton.textContent = 'Connect';
         connectButton.classList.remove('connected');
@@ -369,6 +386,9 @@ async function connectToWebsocket() {
         micButton.disabled = true;
         cameraButton.disabled = true;
         screenButton.disabled = true;
+    } finally {
+        // 重新启用连接按钮
+        connectButton.disabled = false;
     }
 }
 
