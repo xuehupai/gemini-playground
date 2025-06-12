@@ -66,115 +66,74 @@ async function handleWebSocket(request, env) {
 	}
   
 	const url = new URL(request.url);
-	const pathAndQuery = url.pathname + url.search;
-	const targetUrl = `wss://generativelanguage.googleapis.com${pathAndQuery}`;
-	  
-	console.log('Target URL:', targetUrl);
-  
-  const [client, proxy] = new WebSocketPair();
-  proxy.accept();
-  
-   // 用于存储在连接建立前收到的消息
-   let pendingMessages = [];
-  
-   const targetWebSocket = new WebSocket(targetUrl);
- 
-   console.log('Initial targetWebSocket readyState:', targetWebSocket.readyState);
- 
-   targetWebSocket.addEventListener("open", () => {
-     console.log('Connected to target server');
-     console.log('targetWebSocket readyState after open:', targetWebSocket.readyState);
-     
-     // 连接建立后，发送所有待处理的消息
-     console.log(`Processing ${pendingMessages.length} pending messages`);
-     for (const message of pendingMessages) {
-      try {
-        targetWebSocket.send(message);
-        console.log('Sent pending message:', message);
-      } catch (error) {
-        console.error('Error sending pending message:', error);
-      }
-     }
-     pendingMessages = []; // 清空待处理消息队列
-   });
- 
-   proxy.addEventListener("message", async (event) => {
-     console.log('Received message from client:', {
-       dataPreview: typeof event.data === 'string' ? event.data.slice(0, 200) : 'Binary data',
-       dataType: typeof event.data,
-       timestamp: new Date().toISOString()
-     });
-     
-     console.log("targetWebSocket.readyState"+targetWebSocket.readyState)
-     if (targetWebSocket.readyState === WebSocket.OPEN) {
-        try {
-          targetWebSocket.send(event.data);
-          console.log('Successfully sent message to gemini');
-        } catch (error) {
-          console.error('Error sending to gemini:', error);
-        }
-     } else {
-       // 如果连接还未建立，将消息加入待处理队列
-       console.log('Connection not ready, queueing message');
-       pendingMessages.push(event.data);
-     }
-   });
- 
-   targetWebSocket.addEventListener("message", (event) => {
-     console.log('Received message from gemini:', {
-     dataPreview: typeof event.data === 'string' ? event.data.slice(0, 200) : 'Binary data',
-     dataType: typeof event.data,
-     timestamp: new Date().toISOString()
-     });
-     
-     try {
-     if (proxy.readyState === WebSocket.OPEN) {
-       proxy.send(event.data);
-       console.log('Successfully forwarded message to client');
-     }
-     } catch (error) {
-     console.error('Error forwarding to client:', error);
-     }
-   });
- 
-   targetWebSocket.addEventListener("close", (event) => {
-     console.log('Gemini connection closed:', {
-     code: event.code,
-     reason: event.reason || 'No reason provided',
-     wasClean: event.wasClean,
-     timestamp: new Date().toISOString(),
-     readyState: targetWebSocket.readyState
-     });
-     if (proxy.readyState === WebSocket.OPEN) {
-     proxy.close(event.code, event.reason);
-     }
-   });
- 
-   proxy.addEventListener("close", (event) => {
-     console.log('Client connection closed:', {
-     code: event.code,
-     reason: event.reason || 'No reason provided',
-     wasClean: event.wasClean,
-     timestamp: new Date().toISOString()
-     });
-     if (targetWebSocket.readyState === WebSocket.OPEN) {
-     targetWebSocket.close(event.code, event.reason);
-     }
-   });
- 
-   targetWebSocket.addEventListener("error", (error) => {
-     console.error('Gemini WebSocket error:', {
-     error: error.message || 'Unknown error',
-     timestamp: new Date().toISOString(),
-     readyState: targetWebSocket.readyState
-     });
-   });
+    // 从客户端请求 URL 中提取 API 密钥
+    const apiKey = url.searchParams.get("key");
+    if (!apiKey) {
+        return new Response("API key is missing in WebSocket URL.", { status: 401 });
+    }
 
- 
-   return new Response(null, {
-   status: 101,
-   webSocket: client,
-   });
+    // 从查询参数中删除 'key'，因为我们将通过 header 发送
+    url.searchParams.delete("key");
+    const targetPathAndQuery = url.pathname + url.search;
+
+    // 构建目标 URL，但使用 HTTPS 协议，因为 fetch 是通过 HTTP/HTTPS 发起请求的
+    const targetUrl = `https://generativelanguage.googleapis.com${targetPathAndQuery}`;
+
+    const [client, server] = new WebSocketPair(); // client 用于我们的客户端，server 用于连接到 Gemini
+
+    // 使用 fetch 并升级到 WebSocket 来连接到 Gemini
+    const geminiResponse = await fetch(targetUrl, {
+        headers: {
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "x-goog-api-key": apiKey, // 在这里传递 API 密钥
+            "User-Agent": "Cloudflare-Worker-Gemini-Proxy", // 添加 User-Agent 便于识别
+        },
+    });
+
+    const geminiWebSocket = geminiResponse.webSocket;
+
+    if (!geminiWebSocket) {
+        return new Response("Failed to upgrade to WebSocket with Gemini.", { status: 500 });
+    }
+
+    // 设置客户端和 Gemini WebSocket 的事件监听器
+    // 将消息从客户端转发到 Gemini
+    client.addEventListener("message", (event) => {
+        geminiWebSocket.send(event.data);
+    });
+
+    // 将消息从 Gemini 转发到客户端
+    geminiWebSocket.addEventListener("message", (event) => {
+        client.send(event.data);
+    });
+
+    // 处理关闭事件
+    client.addEventListener("close", (event) => {
+        console.log("Client connection closed:", { code: event.code, reason: event.reason });
+        geminiWebSocket.close(event.code, event.reason);
+    });
+
+    geminiWebSocket.addEventListener("close", (event) => {
+        console.log("Gemini connection closed:", { code: event.code, reason: event.reason });
+        client.close(event.code, event.reason);
+    });
+
+    // 处理错误事件
+    client.addEventListener("error", (error) => {
+        console.error("Client WebSocket error:", error);
+        geminiWebSocket.close(1011, "Client error"); // 内部错误
+    });
+
+    geminiWebSocket.addEventListener("error", (error) => {
+        console.error("Gemini WebSocket error:", error);
+        client.close(1011, "Gemini error"); // 内部错误
+    });
+
+    return new Response(null, {
+        status: 101, // Switching Protocols
+        webSocket: client, // 与我们的客户端握手
+    });
 }
 
 async function handleAPIRequest(request, env) {
