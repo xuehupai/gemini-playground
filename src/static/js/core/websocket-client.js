@@ -26,6 +26,7 @@ export class MultimodalLiveClient extends EventEmitter {
         this.currentModel = null;
         this.send = this.send.bind(this);
         this.toolManager = new ToolManager();
+        this.debug = true; // 启用调试模式
     }
 
     /**
@@ -34,8 +35,13 @@ export class MultimodalLiveClient extends EventEmitter {
      * @param {string} type - The type of the log message (e.g., 'server.send', 'client.close').
      * @param {string|Object} message - The message to log.
      */
-    log(type, message) {
-        this.emit('log', { date: new Date(), type, message });
+    log(message, type = 'info') {
+        if (this.debug) {
+            console.log(`[GeminiWebSocket] ${type.toUpperCase()}: ${message}`);
+            if (this.onLog) {
+                this.onLog(message, type);
+            }
+        }
     }
 
     /**
@@ -57,48 +63,78 @@ export class MultimodalLiveClient extends EventEmitter {
      * @throws {ApplicationError} - Throws an error if the connection fails.
      */
     async connect(config, apiKey) {
+        this.log('开始连接...', 'info');
+        
         if (this.isConnected) {
-            throw new Error('已经连接到服务器');
+            const error = '已经连接到服务器，请先断开连接';
+            this.log(error, 'error');
+            throw new Error(error);
+        }
+
+        if (!config || !config.model) {
+            const error = '配置无效：未指定模型';
+            this.log(error, 'error');
+            throw new Error(error);
+        }
+
+        if (!apiKey) {
+            const error = '配置无效：未提供 API Key';
+            this.log(error, 'error');
+            throw new Error(error);
         }
 
         this.currentModel = config.model;
+        this.log(`使用模型: ${this.currentModel}`, 'info');
+        
         const wsUrl = new URL('/v1/models/' + this.currentModel + ':streamGenerateContent', window.location.origin);
         wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-        
-        // 添加 API Key 到 URL
         wsUrl.searchParams.append('key', apiKey);
+        
+        this.log(`连接 URL: ${wsUrl.toString().replace(apiKey, '***')}`, 'info');
 
         return new Promise((resolve, reject) => {
             try {
                 this.ws = new WebSocket(wsUrl.toString());
 
                 this.ws.onopen = () => {
+                    this.log('WebSocket 连接已建立', 'success');
                     this.isConnected = true;
                     this.processMessageQueue();
                     resolve();
                 };
 
-                this.ws.onclose = () => {
+                this.ws.onclose = (event) => {
+                    const message = `WebSocket 连接已关闭 (代码: ${event.code}, 原因: ${event.reason || '无'})`;
+                    this.log(message, 'warning');
                     this.isConnected = false;
                     this.currentModel = null;
                     if (this.onClose) {
-                        this.onClose();
+                        this.onClose(event);
                     }
                 };
 
                 this.ws.onerror = (error) => {
+                    const errorMessage = `WebSocket 错误: ${error.message || '未知错误'}`;
+                    this.log(errorMessage, 'error');
                     this.isConnected = false;
                     this.currentModel = null;
-                    reject(error);
+                    reject(new Error(errorMessage));
                 };
 
                 this.ws.onmessage = (event) => {
+                    this.log('收到消息', 'info');
                     if (this.onMessage) {
-                        this.onMessage(event.data);
+                        try {
+                            this.onMessage(event.data);
+                        } catch (error) {
+                            this.log(`处理消息时出错: ${error.message}`, 'error');
+                        }
                     }
                 };
             } catch (error) {
-                reject(error);
+                const errorMessage = `创建 WebSocket 连接时出错: ${error.message}`;
+                this.log(errorMessage, 'error');
+                reject(new Error(errorMessage));
             }
         });
     }
@@ -110,13 +146,17 @@ export class MultimodalLiveClient extends EventEmitter {
      * @returns {boolean} - True if disconnected, false otherwise.
      */
     disconnect(ws) {
+        this.log('正在断开连接...', 'info');
         if ((!ws || this.ws === ws) && this.ws) {
-            this.ws.close();
+            if (this.ws.readyState === WebSocket.OPEN) {
+                this.ws.close(1000, '用户主动断开连接');
+            }
             this.ws = null;
-            this.log('client.close', 'Disconnected');
-            return true;
         }
-        return false;
+        this.isConnected = false;
+        this.currentModel = null;
+        this.log('连接已断开', 'info');
+        return true;
     }
 
     /**

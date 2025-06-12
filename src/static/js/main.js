@@ -296,20 +296,39 @@ function debounce(func, wait) {
     };
 }
 
-// 修改连接函数，使用选中的模型
+// 添加日志处理函数
+client.onLog = (message, type) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const typeEmoji = {
+        'info': 'ℹ️',
+        'error': '❌',
+        'warning': '⚠️',
+        'success': '✅'
+    }[type] || '⚙️';
+    
+    logMessage(`${timestamp}${typeEmoji}${message}`, type);
+};
+
+// 修改连接函数
 async function connectToWebsocket() {
     if (!apiKeyInput.value) {
-        logMessage('请输入 API Key', 'system');
+        logMessage('请输入 API Key', 'error');
         return;
     }
 
     const selectedModel = modelSelect.value;
     if (!selectedModel) {
-        logMessage('请选择一个模型', 'system');
+        logMessage('请选择一个模型', 'error');
         return;
     }
 
     try {
+        // 如果已经连接，先断开
+        if (client.isConnected) {
+            client.disconnect();
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 等待断开连接完成
+        }
+
         // 使用选中的模型进行连接
         await client.connect({
             model: selectedModel,
@@ -340,9 +359,8 @@ async function connectToWebsocket() {
         screenButton.disabled = false;
         logMessage('已连接到 Gemini API', 'system');
     } catch (error) {
-        const errorMessage = error.message || '未知错误';
         console.error('连接错误:', error);
-        logMessage(`连接错误: ${errorMessage}`, 'system');
+        logMessage(`连接错误: ${error.message}`, 'error');
         isConnected = false;
         connectButton.textContent = 'Connect';
         connectButton.classList.remove('connected');
@@ -480,11 +498,25 @@ messageInput.addEventListener('keypress', (event) => {
 
 micButton.addEventListener('click', handleMicToggle);
 
-connectButton.addEventListener('click', () => {
+connectButton.addEventListener('click', async () => {
     if (isConnected) {
-        disconnectFromWebsocket();
+        try {
+            client.disconnect();
+            isConnected = false;
+            connectButton.textContent = 'Connect';
+            connectButton.classList.remove('connected');
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            micButton.disabled = true;
+            cameraButton.disabled = true;
+            screenButton.disabled = true;
+            logMessage('已断开连接', 'info');
+        } catch (error) {
+            console.error('断开连接错误:', error);
+            logMessage(`断开连接错误: ${error.message}`, 'error');
+        }
     } else {
-        connectToWebsocket();
+        await connectToWebsocket();
     }
 });
 
