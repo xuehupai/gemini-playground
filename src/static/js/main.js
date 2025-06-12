@@ -36,12 +36,14 @@ const systemInstructionInput = document.getElementById('system-instruction');
 systemInstructionInput.value = CONFIG.SYSTEM_INSTRUCTION.TEXT;
 const applyConfigButton = document.getElementById('apply-config');
 const responseTypeSelect = document.getElementById('response-type-select');
+const modelSelect = document.getElementById('model-select');
 
 // Load saved values from localStorage
 const savedApiKey = localStorage.getItem('gemini_api_key');
 const savedVoice = localStorage.getItem('gemini_voice');
 const savedFPS = localStorage.getItem('video_fps');
 const savedSystemInstruction = localStorage.getItem('system_instruction');
+const savedModel = localStorage.getItem('gemini_model');
 
 
 if (savedApiKey) {
@@ -59,6 +61,13 @@ if (savedSystemInstruction) {
     CONFIG.SYSTEM_INSTRUCTION.TEXT = savedSystemInstruction;
 }
 
+// Set default model or load saved model
+if (savedModel) {
+    CONFIG.GEMINI_MODEL = savedModel;
+} else {
+    CONFIG.GEMINI_MODEL = "gemini-1.5-flash-latest"; // Set a default model if none is saved
+}
+
 // Handle configuration panel toggle
 configToggle.addEventListener('click', () => {
     configContainer.classList.toggle('active');
@@ -69,6 +78,48 @@ applyConfigButton.addEventListener('click', () => {
     configContainer.classList.toggle('active');
     configToggle.classList.toggle('active');
 });
+
+// Fetch models and populate the dropdown
+async function fetchModels() {
+    try {
+        const response = await fetch('/models');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        
+        // Clear existing options
+        modelSelect.innerHTML = '<option value="">请选择模型</option>'; 
+
+        data.data.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = model.id;
+            modelSelect.appendChild(option);
+        });
+
+        // Set the selected model if saved
+        if (CONFIG.GEMINI_MODEL) {
+            modelSelect.value = CONFIG.GEMINI_MODEL;
+        }
+
+        logMessage('模型列表加载成功', 'system');
+    } catch (error) {
+        Logger.error('获取模型列表失败:', error);
+        logMessage('获取模型列表失败: ' + error.message, 'system');
+        modelSelect.innerHTML = '<option value="">加载模型失败</option>';
+    }
+}
+
+// Handle model selection
+modelSelect.addEventListener('change', (event) => {
+    CONFIG.GEMINI_MODEL = event.target.value;
+    localStorage.setItem('gemini_model', CONFIG.GEMINI_MODEL);
+    logMessage(`已选择模型: ${CONFIG.GEMINI_MODEL}`, 'system');
+});
+
+// Initial fetch of models when the page loads
+fetchModels();
 
 // State variables
 let isRecording = false;
@@ -248,6 +299,11 @@ async function connectToWebsocket() {
         return;
     }
 
+    if (!CONFIG.GEMINI_MODEL) {
+        logMessage('请选择一个模型', 'system');
+        return;
+    }
+
     // Save values to localStorage
     localStorage.setItem('gemini_api_key', apiKeyInput.value);
     localStorage.setItem('gemini_voice', voiceSelect.value);
@@ -274,7 +330,7 @@ async function connectToWebsocket() {
     };  
 
     try {
-        await client.connect(config,apiKeyInput.value);
+        await client.connect(apiKeyInput.value, CONFIG.GEMINI_MODEL);
         isConnected = true;
         await resumeAudioContext();
         connectButton.textContent = 'Disconnect';
