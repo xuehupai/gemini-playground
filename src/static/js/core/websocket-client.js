@@ -30,7 +30,6 @@ export class MultimodalLiveClient extends EventEmitter {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
         this.reconnectDelay = 1000; // 1秒
-        this.config = null; // 存储连接配置
     }
 
     /**
@@ -87,15 +86,6 @@ export class MultimodalLiveClient extends EventEmitter {
             throw new Error(error);
         }
 
-        // 保存配置
-        this.config = {
-            ...config,
-            tools: [
-                ...(this.toolManager?.getToolDeclarations() || []),
-                ...(config.tools || [])
-            ]
-        };
-
         this.currentModel = config.model;
         this.log(`使用模型: ${this.currentModel}`, 'info');
         
@@ -117,35 +107,19 @@ export class MultimodalLiveClient extends EventEmitter {
                 this.ws = new WebSocket(wsUrl.toString());
                 this.log('WebSocket 实例已创建', 'info');
 
+                // 设置超时
                 const connectionTimeout = setTimeout(() => {
                     if (this.ws.readyState !== WebSocket.OPEN) {
                         this.log('连接超时', 'error');
                         this.ws.close();
                         reject(new Error('连接超时'));
                     }
-                }, 10000);
+                }, 10000); // 10秒超时
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
                     this.log('WebSocket 连接已建立', 'success');
                     this.log(`WebSocket 状态: ${this.getWebSocketState(this.ws.readyState)}`, 'info');
-                    
-                    // 发送初始化消息
-                    try {
-                        const setupMessage = {
-                            setup: this.config
-                        };
-                        this.log('发送初始化配置...', 'info');
-                        this.log('配置内容:', 'info');
-                        this.log(JSON.stringify(setupMessage, null, 2), 'info');
-                        this.ws.send(JSON.stringify(setupMessage));
-                        this.log('初始化配置已发送', 'success');
-                    } catch (error) {
-                        this.log(`发送初始化配置失败: ${error.message}`, 'error');
-                        reject(error);
-                        return;
-                    }
-
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
                     this.processMessageQueue();
