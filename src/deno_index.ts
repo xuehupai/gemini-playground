@@ -19,145 +19,50 @@ async function handleWebSocket(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const targetUrl = `wss://generativelanguage.googleapis.com${url.pathname}${url.search}`;
   
-  console.log('WebSocket 连接请求:', {
-    url: req.url,
-    targetUrl: targetUrl.replace(/\?key=.*$/, '?key=***'),
-    headers: Object.fromEntries(req.headers.entries())
-  });
+  console.log('Target URL:', targetUrl);
   
   const pendingMessages: string[] = [];
-  let targetWs: WebSocket | null = null;
-  let isClientConnected = true;
-  let isTargetConnected = false;
+  const targetWs = new WebSocket(targetUrl);
+  
+  targetWs.onopen = () => {
+    console.log('Connected to Gemini');
+    pendingMessages.forEach(msg => targetWs.send(msg));
+    pendingMessages.length = 0;
+  };
 
-  try {
-    targetWs = new WebSocket(targetUrl);
-    
-    targetWs.onopen = () => {
-      console.log('已连接到 Gemini 服务器');
-      isTargetConnected = true;
-      
-      // 发送所有待处理的消息
-      console.log(`发送 ${pendingMessages.length} 条待处理消息`);
-      for (const msg of pendingMessages) {
-        try {
-          targetWs?.send(msg);
-          console.log('已发送待处理消息:', msg.slice(0, 100) + '...');
-        } catch (error) {
-          console.error('发送待处理消息失败:', error);
-        }
-      }
-      pendingMessages.length = 0;
-    };
-
-    clientWs.onmessage = (event) => {
-      console.log('收到客户端消息:', {
-        type: typeof event.data,
-        preview: typeof event.data === 'string' ? event.data.slice(0, 100) + '...' : '二进制数据',
-        timestamp: new Date().toISOString()
-      });
-
-      if (targetWs?.readyState === WebSocket.OPEN) {
-        try {
-          targetWs.send(event.data);
-          console.log('消息已转发到 Gemini');
-        } catch (error) {
-          console.error('转发消息到 Gemini 失败:', error);
-          if (isClientConnected) {
-            clientWs.send(JSON.stringify({
-              error: '转发消息失败: ' + (error instanceof Error ? error.message : '未知错误')
-            }));
-          }
-        }
-      } else {
-        console.log('Gemini 连接未就绪，消息已加入队列');
-        pendingMessages.push(event.data);
-      }
-    };
-
-    targetWs.onmessage = (event) => {
-      console.log('收到 Gemini 消息:', {
-        type: typeof event.data,
-        preview: typeof event.data === 'string' ? event.data.slice(0, 100) + '...' : '二进制数据',
-        timestamp: new Date().toISOString()
-      });
-
-      if (clientWs.readyState === WebSocket.OPEN) {
-        try {
-          clientWs.send(event.data);
-          console.log('消息已转发到客户端');
-        } catch (error) {
-          console.error('转发消息到客户端失败:', error);
-        }
-      } else {
-        console.log('客户端连接已关闭，无法转发消息');
-      }
-    };
-
-    clientWs.onclose = (event) => {
-      console.log('客户端连接已关闭:', {
-        code: event.code,
-        reason: event.reason || '无原因',
-        wasClean: event.wasClean,
-        timestamp: new Date().toISOString()
-      });
-      isClientConnected = false;
-
-      if (targetWs?.readyState === WebSocket.OPEN) {
-        try {
-          targetWs.close(1000, '客户端断开连接');
-        } catch (error) {
-          console.error('关闭 Gemini 连接失败:', error);
-        }
-      }
-    };
-
-    targetWs.onclose = (event) => {
-      console.log('Gemini 连接已关闭:', {
-        code: event.code,
-        reason: event.reason || '无原因',
-        wasClean: event.wasClean,
-        timestamp: new Date().toISOString()
-      });
-      isTargetConnected = false;
-
-      if (clientWs.readyState === WebSocket.OPEN) {
-        try {
-          clientWs.close(event.code, event.reason || 'Gemini 服务器断开连接');
-        } catch (error) {
-          console.error('关闭客户端连接失败:', error);
-        }
-      }
-    };
-
-    targetWs.onerror = (error) => {
-      console.error('Gemini WebSocket 错误:', {
-        error: error instanceof Error ? error.message : '未知错误',
-        timestamp: new Date().toISOString()
-      });
-
-      if (clientWs.readyState === WebSocket.OPEN) {
-        try {
-          clientWs.send(JSON.stringify({
-            error: 'Gemini 服务器错误: ' + (error instanceof Error ? error.message : '未知错误')
-          }));
-        } catch (sendError) {
-          console.error('发送错误消息到客户端失败:', sendError);
-        }
-      }
-    };
-
-  } catch (error) {
-    console.error('WebSocket 处理错误:', error);
-    if (clientWs.readyState === WebSocket.OPEN) {
-      try {
-        clientWs.close(1011, '服务器内部错误');
-      } catch (closeError) {
-        console.error('关闭客户端连接失败:', closeError);
-      }
+  clientWs.onmessage = (event) => {
+    console.log('Client message received');
+    if (targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(event.data);
+    } else {
+      pendingMessages.push(event.data);
     }
-    throw error;
-  }
+  };
+
+  targetWs.onmessage = (event) => {
+    console.log('Gemini message received');
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(event.data);
+    }
+  };
+
+  clientWs.onclose = (event) => {
+    console.log('Client connection closed');
+    if (targetWs.readyState === WebSocket.OPEN) {
+      targetWs.close(1000, event.reason);
+    }
+  };
+
+  targetWs.onclose = (event) => {
+    console.log('Gemini connection closed');
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.close(event.code, event.reason);
+    }
+  };
+
+  targetWs.onerror = (error) => {
+    console.error('Gemini WebSocket error:', error);
+  };
 
   return response;
 }
