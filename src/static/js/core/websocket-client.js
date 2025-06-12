@@ -27,9 +27,6 @@ export class MultimodalLiveClient extends EventEmitter {
         this.send = this.send.bind(this);
         this.toolManager = new ToolManager();
         this.debug = true; // 启用调试模式
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 3;
-        this.reconnectDelay = 1000; // 1秒
     }
 
     /**
@@ -94,95 +91,21 @@ export class MultimodalLiveClient extends EventEmitter {
         wsUrl.searchParams.append('key', apiKey);
         
         this.log(`连接 URL: ${wsUrl.toString().replace(apiKey, '***')}`, 'info');
-        this.log(`WebSocket 状态: ${this.ws ? this.getWebSocketState(this.ws.readyState) : '未初始化'}`, 'info');
 
         return new Promise((resolve, reject) => {
             try {
-                if (this.ws) {
-                    this.log('清理现有连接...', 'info');
-                    this.ws.close();
-                    this.ws = null;
-                }
-
                 this.ws = new WebSocket(wsUrl.toString());
-                this.log('WebSocket 实例已创建', 'info');
-
-                // 设置超时
-                const connectionTimeout = setTimeout(() => {
-                    if (this.ws.readyState !== WebSocket.OPEN) {
-                        this.log('连接超时', 'error');
-                        this.ws.close();
-                        reject(new Error('连接超时'));
-                    }
-                }, 10000); // 10秒超时
 
                 this.ws.onopen = () => {
-                    clearTimeout(connectionTimeout);
                     this.log('WebSocket 连接已建立', 'success');
-                    this.log(`WebSocket 状态: ${this.getWebSocketState(this.ws.readyState)}`, 'info');
                     this.isConnected = true;
-                    this.reconnectAttempts = 0;
                     this.processMessageQueue();
                     resolve();
                 };
 
                 this.ws.onclose = (event) => {
-                    clearTimeout(connectionTimeout);
-                    const state = this.getWebSocketState(event.code);
-                    const message = `WebSocket 连接已关闭 (代码: ${event.code}, 状态: ${state}, 原因: ${event.reason || '无'})`;
+                    const message = `WebSocket 连接已关闭 (代码: ${event.code}, 原因: ${event.reason || '无'})`;
                     this.log(message, 'warning');
-                    
-                    // 记录更详细的关闭原因
-                    switch (event.code) {
-                        case 1000:
-                            this.log('正常关闭', 'info');
-                            break;
-                        case 1001:
-                            this.log('离开页面或导航到其他页面', 'info');
-                            break;
-                        case 1002:
-                            this.log('协议错误', 'error');
-                            break;
-                        case 1003:
-                            this.log('接收到无法处理的数据', 'error');
-                            break;
-                        case 1005:
-                            this.log('无状态码关闭', 'warning');
-                            break;
-                        case 1006:
-                            this.log('连接异常关闭，可能是网络问题或服务器拒绝连接', 'error');
-                            break;
-                        case 1007:
-                            this.log('接收到不一致的数据', 'error');
-                            break;
-                        case 1008:
-                            this.log('违反政策', 'error');
-                            break;
-                        case 1009:
-                            this.log('消息太大', 'error');
-                            break;
-                        case 1010:
-                            this.log('客户端需要扩展', 'error');
-                            break;
-                        case 1011:
-                            this.log('服务器遇到意外情况', 'error');
-                            break;
-                        case 1012:
-                            this.log('服务重启', 'info');
-                            break;
-                        case 1013:
-                            this.log('服务临时过载', 'warning');
-                            break;
-                        case 1014:
-                            this.log('网关超时', 'error');
-                            break;
-                        case 1015:
-                            this.log('TLS 握手失败', 'error');
-                            break;
-                        default:
-                            this.log(`未知关闭代码: ${event.code}`, 'warning');
-                    }
-
                     this.isConnected = false;
                     this.currentModel = null;
                     if (this.onClose) {
@@ -191,21 +114,7 @@ export class MultimodalLiveClient extends EventEmitter {
                 };
 
                 this.ws.onerror = (error) => {
-                    clearTimeout(connectionTimeout);
-                    let errorMessage = 'WebSocket 错误: ';
-                    
-                    // 尝试获取更详细的错误信息
-                    if (error instanceof Error) {
-                        errorMessage += error.message;
-                    } else if (error.message) {
-                        errorMessage += error.message;
-                    } else {
-                        errorMessage += '未知错误';
-                        // 记录更多错误信息
-                        this.log('错误详情:', 'error');
-                        this.log(JSON.stringify(error, null, 2), 'error');
-                    }
-                    
+                    const errorMessage = `WebSocket 错误: ${error.message || '未知错误'}`;
                     this.log(errorMessage, 'error');
                     this.isConnected = false;
                     this.currentModel = null;
@@ -219,8 +128,6 @@ export class MultimodalLiveClient extends EventEmitter {
                             this.onMessage(event.data);
                         } catch (error) {
                             this.log(`处理消息时出错: ${error.message}`, 'error');
-                            this.log('消息内容:', 'error');
-                            this.log(event.data, 'error');
                         }
                     }
                 };
@@ -230,16 +137,6 @@ export class MultimodalLiveClient extends EventEmitter {
                 reject(new Error(errorMessage));
             }
         });
-    }
-
-    getWebSocketState(code) {
-        const states = {
-            0: 'CONNECTING',
-            1: 'OPEN',
-            2: 'CLOSING',
-            3: 'CLOSED'
-        };
-        return states[code] || `未知状态(${code})`;
     }
 
     /**
